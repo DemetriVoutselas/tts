@@ -4,6 +4,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 from  SpeakerEncoderBlocks import Prenet, TemporalProcessing, CloningSamplesAttention
 
+"""
+Hparams:
+Embedding size: 16
+mel freq bands: 80
+hop_len: 40
+window: 1600
+
+prenet layers: 2
+prenet layer size: 128
+
+Temporal processing layers: 2
+filter width: 12 (needs to be odd though)
+
+multi-head attention heads: 2
+unit size for keys, queries, and values: 128
+
+lr: 0.0006
+annealing rate: 0.6 every 800 iterations
+batch: 64
+
+"""
+
 
 class SpeakerEncoder(nn.Module):
     """
@@ -11,15 +33,15 @@ class SpeakerEncoder(nn.Module):
     """
 
     def __init__(self,
-                num_prenet_layers=4,
-                prenet_input_dim=128, # This is the number of mel-frequency channels in mel-spectrogram
+                num_prenet_layers=2,
+                prenet_input_dim=80, # This is the number of mel-frequency channels in mel-spectrogram
                 prenet_hidden_dim=128, # This can be whatever
-                prenet_output_dim=64, #Can also be whatever, this is also the input dimention to temporal processing block
-                conv_kernel_size=3, #must be odd
+                prenet_output_dim=128, #Can also be whatever, this is also the input dimention to temporal processing block
+                conv_kernel_size=11, #must be odd
                 dropout=0.1,
                 attention_dim=128, #can be whatever
-                attention_heads=8,
-                embedding_dim=64 #This should be size of actual speaker embeddings
+                attention_heads=2,
+                embedding_dim=16 #This should be size of actual speaker embeddings
                 ):
         super().__init__()
 

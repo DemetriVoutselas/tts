@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
 class Prenet(nn.Module):
 
   def __init__(self,
@@ -46,7 +47,7 @@ class TemporalProcessing(nn.Module):
 
 
     self.conv_layers = nn.ModuleList([
-        nn.Conv1d(input_dim, hidden_dim, kernel_size, padding=kernel_size // 2) for _ in range(num_layers)
+        nn.Conv1d(input_dim, hidden_dim, kernel_size, padding=(kernel_size -1)// 2) for _ in range(num_layers)
         ])
     
     self.dropout = nn.Dropout(dropout)
@@ -105,7 +106,8 @@ class CloningSamplesAttention(nn.Module):
     self.attention = nn.MultiheadAttention(attention_size, num_heads, batch_first=True)
     self.post_attention_block = nn.Sequential(
         nn.Linear(attention_size, 1),
-        nn.Softsign()
+        nn.Softsign(),
+        #nn.LayerNorm(1), # When layer norm is added all outputs are zero, may need to remove this layer not sure
     )
 
     self.fc_embedding = nn.Linear(input_size, embed_dim)
