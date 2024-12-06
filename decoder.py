@@ -3,28 +3,32 @@ import torch.nn as nn
 from common import Speaker, TTSConv
 
 class Prenet(nn.Module):
-    def __init__(self, speaker_embedding_dim, out_dim, dropout, n_layers, *args, **kwargs):
+    """
+    Mixes mel spec with speaker embeddings to pass it off to convolutions
+    """
+    def __init__(self, mel_spec_dim, hidden_dim, speaker_embedding_dim, dropout, n_layers, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.speaker = Speaker(speaker_embedding_dim, out_dim)
         self.dropout = nn.Dropout(dropout)
         
         self.n_layers = n_layers
-        self.fc = nn.ModuleList(nn.Linear(out_dim, out_dim) for _ in range(n_layers))
-        self.relu = nn.ModuleList(nn.ReLU() for _ in range(n_layers))
+        self.fc = nn.ModuleList()
+        self.relu = nn.ModuleList()
+        self.speaker = nn.ModuleList()
 
-    def forward(self, input, speaker_embedding = None):
+        for i in range(n_layers):
+            self.fc.append(nn.Linear(mel_spec_dim if i == 0 else hidden_dim, hidden_dim))
+            self.relu.append(nn.ReLU())
+            self.speaker.append(Speaker(speaker_embedding_dim, hidden_dim))
+
+    def forward(self, input, speaker_embedding):
         output = input
         
         for i in range(self.n_layers):
-            #no dropout in the first layer
             if i != 0:
                 output = self.dropout(output) 
-
-            if speaker_embedding:
-                speaker_bias = self.speaker(speaker_embedding)
-                output += speaker_bias
-
+                        
+            output += self.speaker[i](speaker_embedding)
             output = self.fc[i](output)
             output = self.relu[i](output)
 
@@ -51,7 +55,7 @@ class Attention(nn.Module):
         self.softmax = nn.Softmax(-1)
         
         
-    def forward(self, query, keys, values, speaker_embedding = None):
+    def forward(self, query, keys, values, speaker_embedding, current_mel_pos ):
         """
         Parameters
         -
@@ -62,16 +66,14 @@ class Attention(nn.Module):
         values: tensor from encoder 
             (batch, text_length, hidden_dim)
         """
-        if speaker_embedding:
-            speaker_key_weight = self.speakers[0](speaker_embedding)
-            speaker_key_weight *= self.w_initial
-            speaker_key_weight += self.position_encoding(speaker_key_weight)  
-            keys += speaker_key_weight
+        
+        speaker_key_weight = self.speakers[0](speaker_embedding)
+        speaker_key_weight *= self.w_initial 
+        keys += self.position_encoding(speaker_key_weight) 
 
-            speaker_query_weight = self.speakers[1](speaker_embedding)
-            speaker_query_weight *= 2
-            speaker_query_weight += self.position_encoding(speaker_query_weight)  
-            query += speaker_query_weight
+        speaker_query_weight = self.speakers[1](speaker_embedding)
+        speaker_query_weight *= 2
+        query += self.position_encoding(speaker_query_weight, current_mel_pos) 
 
         keys = self.key_fc(keys)
         query = self.query_fc(query)
@@ -86,11 +88,11 @@ class Attention(nn.Module):
         return output
 
 
-    def position_encoding(self, length, channels, position_rate):
+    def position_encoding(self, length, timesteps, position_rate, current_pos = 0):
         position = th.arange(length).unsqueeze(1)
-        factor = th.exp( -th.arange(channels) * th.log(10000) / (channels - 1) )
+        factor = th.exp( -th.arange(timesteps) * th.log(10000) / (timesteps - 1) )
 
-        pe = th.zeros(length, channels)
+        pe = th.zeros(length, timesteps)
         pe[:, 0::2] = th.sin(position_rate * position * factor)[0::2]
         pe[:, 1::2] = th.cos(position_rate * position * factor)[1::2]
 
@@ -98,17 +100,14 @@ class DecoderCore(nn.Module):
     def __init__(self, speaker_embedding_dim, hidden_dim, dropout, n_layers, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        self.convs = nn.ModuleList(
-            TTSConv(dropout, hidden_dim, speaker_embedding_dim, causal_padding=True)
-            for _ in range(n_layers)
-        )
+        self.convs = nn.ModuleList()
+        self.attns = nn.ModuleList()
 
-        self.attns = nn.ModuleList(
-            Attention(speaker_embedding_dim, hidden_dim)
-            for _ in range(n_layers)
-        )
+        for _ in range(n_layers):
+            self.convs.append(TTSConv(dropout, hidden_dim, speaker_embedding_dim, causal_padding=True))
+            self.attns.append(Attention(speaker_embedding_dim, hidden_dim))
 
-    def forward(self, input, enc_keys, enc_values, speaker_embedding = None):
+    def forward(self, input, enc_keys, enc_values, speaker_embedding):
         out = input
         for i in range(self.n_layers):
             conv_out = self.convs[i](out, speaker_embedding)
@@ -139,24 +138,25 @@ class Decoder(nn.Module):
         self.done = Done(hidden_dim)        
         self.prenet = Prenet(speaker_embedding_dim, hidden_dim, dropout, n_layers)
         self.decoder_core = DecoderCore(speaker_embedding_dim, hidden_dim, dropout, n_layers)
-        
+                
         self.mel_fc = nn.Linear(hidden_dim, mel_dim)
         self.mel_sigmoid_fc = nn.Linear(hidden_dim, mel_dim)
         self.mel_sigmoid = nn.Sigmoid()
 
-    def forward(self, mel_input, encoder_keys, encoder_values, speaker_embedding_dim = None):
-        prenet_out = self.prenet(mel_input, speaker_embedding_dim)
-        dec_out = self.decoder_core(prenet_out, encoder_keys, encoder_values)
+    def forward(self, mel_input, encoder_keys, encoder_values, speaker_embedding ):
+        
+        prenet_out = self.prenet(mel_input, speaker_embedding)
+        attn_out = self.decoder_core(prenet_out, encoder_keys, encoder_values)
 
-        done_out = self.done(dec_out)
+        done_out = self.done(attn_out)
 
-        mel_out_gate = self.mel_sigmoid_fc(dec_out)
+        mel_out_gate = self.mel_sigmoid_fc(attn_out)
         mel_out_gate = self.mel_sigmoid(mel_out_gate)
 
-        mel_out = self.mel_fc(dec_out)
+        mel_out = self.mel_fc(attn_out)
 
-        return (dec_out, mel_out * mel_out_gate, done_out)
+        return (attn_out, mel_out * mel_out_gate, done_out)
 
-        #it is unclear what is fed into the mel_sigmoid_fc. will assume its decoder_core out
+
 
 

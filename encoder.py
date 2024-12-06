@@ -4,93 +4,70 @@ import torch.nn as nn
 
 from common import Speaker, TTSConv
 
-class Prenet(nn.Module):
-    def __init__(self, 
-        vocabulary_size, 
-        text_embedding_dim, 
-        speaker_embedding_dim, 
-        hidden_dim,             
-        *args, 
-        **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-
-        self.projection_fc = nn.Linear(text_embedding_dim, hidden_dim)
-        self.speaker = Speaker(speaker_embedding_dim, hidden_dim)
-
-        #TODO: custom embeddings, phoneme support? 
-        #TODO: paper doesnt mention positional encodings? which seems weird. 
-        self.embedding_layer = nn.Embedding(vocabulary_size, text_embedding_dim)
-
-    
-    def forward(self, text, speaker_embedding = None) -> Tuple[th.Tensor, th.Tensor]:
-        text_embedding = self.embedding_layer(text)
-
-        if speaker_embedding:
-            speaker_bias = self.speaker(speaker_embedding)
-            text_embedding = text_embedding + speaker_bias
-
-        output = self.projection_fc(text_embedding)
-
-        return (output, text_embedding)
-    
-class PostNet(nn.Module):        
-    def __init__(self,
-        speaker_embedding_dim, 
-        hidden_dim, 
-        *args, 
-        **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-
-        self.speaker = Speaker(speaker_embedding_dim, hidden_dim)
-        self.input_fc = nn.Linear(hidden_dim, hidden_dim)
-        
-
-    def forward(self, input, speaker_embedding = None) -> th.Tensor:
-        output = self.input_fc(input)
-        if speaker_embedding:
-            speaker_bias = self.speaker(speaker_embedding)            
-            output += speaker_bias
-
-        return output
 
 class Encoder(nn.Module):
+    """
+    Encoder network as described in Section 3.4 of the paper.
+    
+    Args:
+        n_vocab: Size of the symbol vocabulary
+        symbol_embedding_dim: Dimension of symbol embeddings
+        hidden_dim: Hidden dimension of the network
+        speaker_embedding_dim: Dimension of speaker embeddings
+        dropout: Dropout probability
+        n_conv: Number of convolution blocks
+    """
+        
     def __init__(self, 
-        vocabulary_size,
-        text_embedding_dim,
+        n_vocab,
+        symbol_embedding_dim,
+        hidden_dim,
         speaker_embedding_dim,
         dropout,
-        convolutions, 
-        conv_dim,
+        n_conv,         
         *args, 
         **kwargs
     ):
         super().__init__(*args, **kwargs)
 
-        self.pre_net = Encoder.Prenet(vocabulary_size, text_embedding_dim, speaker_embedding_dim, conv_dim)
+        self.prenet_embedding = nn.Embedding(n_vocab, symbol_embedding_dim)
+        self.prenet_speaker = Speaker(speaker_embedding_dim, hidden_dim)
+        self.prenet_fc = nn.Linear(symbol_embedding_dim, hidden_dim)
+        self.prenet_fc = nn.utils.parametrizations.weight_norm(self.prenet_fc)
 
         self.conv_block = nn.ModuleList(
-            TTSConv(dropout, conv_dim, speaker_embedding_dim) 
-            for _ in range(convolutions)
+            TTSConv(hidden_dim, speaker_embedding_dim, dropout) 
+            for _ in range(n_conv)
         )
 
-        self.post_net = Encoder.PostNet(speaker_embedding_dim, conv_dim)        
+        self.postnet_speaker = Speaker(speaker_embedding_dim, hidden_dim)
+        self.postnet_fc = nn.Linear(hidden_dim, hidden_dim)
+        self.postnet_fc = nn.utils.parametrizations.weight_norm(self.postnet_fc)
+           
 
-    def forward(self, input, speaker_embedding = None):
-        pre_out: th.Tensor
-        pre_embedding: th.Tensor
-        pre_out, pre_embedding = self.pre_net(input, speaker_embedding)
+    def forward(self, symbols, speaker_embedding):
+        prenet_out: th.Tensor
+        symbol_embedding: th.Tensor
 
-        # pre_out outputs       (batch, seq_len, emb_dim)
-        # convolution expects   (batch, emb_dim, seq_len)
-        conv_out = pre_out.transpose(1, 2)
+        #prenet
+        symbol_embedding = self.prenet_embedding(symbols)     
+        prenet_speaker_bias = self.prenet_speaker(speaker_embedding)   
+        prenet_out = symbol_proj + prenet_speaker_bias
+
+        symbol_proj = self.prenet_fc(symbol_embedding) # (batch, timesteps, conv channels)
+
+        
+        conv_out = symbol_proj.transpose(1, 2)
+
         for conv in self.conv_block:
             conv_out = conv(conv_out, speaker_embedding)
 
         #unwind the transposition    
         conv_out = conv_out.transpose(1,2)
-        post_keys = self.post_net(conv_out, speaker_embedding)
-        post_values = th.sqrt(.5) * (post_keys + pre_embedding)
 
-        return (post_keys, post_values)
+        #postnet
+        postnet_speaker_bias = self.postnet_speaker(speaker_embedding)
+        postnet_keys = self.postnet_fc(conv_out) + postnet_speaker_bias
+        postnet_values = th.sqrt(.5) * (postnet_keys + symbol_embedding)
+
+        return (postnet_keys, postnet_values)

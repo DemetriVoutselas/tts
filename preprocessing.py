@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 import os
 import re
 from typing import Optional
@@ -8,11 +9,10 @@ import matplotlib.pyplot as plt
 import nltk
 import numpy as np
 import soundfile as sf
+import torch as th
 from tqdm import tqdm
 
-#download phoneme dict
-nltk.download('cmudict')
-PHONEME_DICT = nltk.corpus.cmudict.dict()
+from phoneme import get_phoneme
 
 SR = 48000
 R = 4
@@ -28,25 +28,20 @@ VCTK_AUDIO_DIR = f'{VCTK_ROOT_DIR}/wav48/'
 VCTK_TXT_DIR = f'{VCTK_ROOT_DIR}/txt'
 VCTK_SPEAKER_INFO_PATH = f"{VCTK_ROOT_DIR}/speaker-info.txt"
 
+PROCESSED_SAVE_DIR = 'processed'
+
 MEL_BANDS = 80
 MEL_BASIS = librosa.filters.mel(sr = SR, n_fft= FFT_N, n_mels= MEL_BANDS)
 
 UNKNOWN_PHONEME = "<UNK>"
 
-def get_phoneme(words: str, phoneme_dict = PHONEME_DICT):
-    words = re.sub(r'[^\w\s]', '', words)
-    words = re.sub(r'/s+', '', words)
-    words = words.strip()
+def normalize_text(text: str):
+    text = re.sub(r'[^\w\s.?!]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    text = text.upper()
 
-    def word_or_unknown(word):
-        r = phoneme_dict.get(word.lower())
-        if r:
-            return r[0]
-        else:
-            #print(f"phoneme not found: {word}")
-            return UNKNOWN_PHONEME
-    
-    return [word_or_unknown(word) for word in words.split() ]
+    return text
 
 def trim_silence(audio, top_db = TOP_DB):
     audio, _ = librosa.effects.trim(audio, top_db)
@@ -58,15 +53,17 @@ def get_audio(path, sr = SR):
 
 def get_text(path):
     with open(path, 'r') as fp:
-        return fp.read().replace('\n', '')
+        text= fp.read().replace('\n', '')
+    
+    return normalize_text(text)
 
-def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = FFT_WINDOW):
+def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = FFT_WINDOW) -> th.Tensor:
     linear_stft = librosa.stft(audio, n_fft= n_fft, hop_length= hop_length, win_length= window_length)
     linear_spec = np.abs(linear_stft)
-    return linear_spec
+    return th.from_numpy(linear_spec)
 
-def get_mel_spec(linear_spec, mel_basis = MEL_BASIS):
-    return np.dot(mel_basis, linear_spec)
+def get_mel_spec(linear_spec, mel_basis = MEL_BASIS) -> th.Tensor:
+    return th.from_numpy(np.dot(mel_basis, linear_spec))
 
 def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length = FFT_HOP, win_length = FFT_WINDOW, algo = 'griffin'):
     if algo == 'griffin':
@@ -109,6 +106,8 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
             tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file, audio_file=audio_file)
             #tts_data_item.plot_spec()
             tts_data_items.append(tts_data_item)
+            tts_data_item.save()
+
 
     return tts_data_items
 
@@ -118,11 +117,11 @@ class TTSDataItem:
     utterance_id: str
     type: str
     text: str
-    phoneme: Optional[str]
+    phoneme: Optional[list[str]]
     #audio: np.ndarray
 
-    linear_spec: np.ndarray
-    mel_spec: np.ndarray
+    linear_spec: th.Tensor
+    mel_spec: th.Tensor
 
     @staticmethod
     def build(speaker_id: str, utterance_id: str, text_file: str, audio_file:str, type: str = 'VCTK' ) -> 'TTSDataItem':
@@ -154,10 +153,14 @@ class TTSDataItem:
 
         plt.show()
 
+    def save(self, processed_path = PROCESSED_SAVE_DIR):
+        save_path = f"{processed_path}/{self.type}/{self.utterance_id}"
+        os.makedirs(save_path, exist_ok = True)
+        with open(f"{save_path}/data.dat", "w") as fp:
+            fp.write(json.dumps(dict()))
+        np.save(f"{save_path}/linear_spec", self.linear_spec)
+        np.save(f"{save_path}/mel_spec", self.linear_spec)
+        th.save()
+    
+
 get_vctk_audio()
-
-
-
-
-
-
