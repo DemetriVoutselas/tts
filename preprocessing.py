@@ -1,4 +1,10 @@
-from dataclasses import dataclass
+"""
+Runs preprocessing on the wav/text pairs from the source dataset
+
+As of now, this just saves the preprocessed files to the hard drive. 
+"""
+
+from dataclasses import asdict, dataclass
 import json
 import os
 import re
@@ -24,7 +30,7 @@ FFT_WINDOW = 2400
 FFT_HOP = 600
 
 VCTK_ROOT_DIR = 'data/VCTK-Corpus'
-VCTK_AUDIO_DIR = f'{VCTK_ROOT_DIR}/wav48/'
+VCTK_AUDIO_DIR = f'{VCTK_ROOT_DIR}/wav48'
 VCTK_TXT_DIR = f'{VCTK_ROOT_DIR}/txt'
 VCTK_SPEAKER_INFO_PATH = f"{VCTK_ROOT_DIR}/speaker-info.txt"
 
@@ -157,10 +163,19 @@ class TTSDataItem:
         save_path = f"{processed_path}/{self.type}/{self.utterance_id}"
         os.makedirs(save_path, exist_ok = True)
         with open(f"{save_path}/data.dat", "w") as fp:
-            fp.write(json.dumps(dict()))
-        np.save(f"{save_path}/linear_spec", self.linear_spec)
-        np.save(f"{save_path}/mel_spec", self.linear_spec)
-        th.save()
+            fp.write(
+                json.dumps(
+                    dict(
+                        speaker_id = self.speaker_id,
+                        utterance_id = self.utterance_id,
+                        type = self.type,
+                        text = self.text,
+                        phoneme = self.phoneme
+                    )
+                )
+            )
+        th.save(self.linear_spec, f"{save_path}/linear_spec",)
+        th.save(self.linear_spec, f"{save_path}/mel_spec", )
     
 
 get_vctk_audio()
