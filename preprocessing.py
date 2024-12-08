@@ -159,7 +159,7 @@ class TTSDataItem:
         with open(f"{save_path}/data.dat", "w") as fp:
             fp.write(json.dumps(dict()))
         np.save(f"{save_path}/linear_spec", self.linear_spec)
-        np.save(f"{save_path}/mel_spec", self.linear_spec)
+        np.save(f"{save_path}/mel_spec", self.mel_spec)
         th.save()
     
 
