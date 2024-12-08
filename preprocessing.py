@@ -102,6 +102,9 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
     tts_data_items = []    
     for speaker_id, *_ in tqdm(speakers):        
         speaker_dir = f'p{speaker_id}'
+        if not os.path.exists(speaker_dir):
+            print(f'WARNING: path not found: {speaker_dir}')
+            continue
         speaker_txt_files = os.listdir(f'{txt_path}/{speaker_dir}')        
         speaker_audio_files = [f'{fn[:-4]}.wav'  for fn in speaker_txt_files]
         
