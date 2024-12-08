@@ -20,14 +20,19 @@ from tqdm import tqdm
 
 from phoneme import get_phoneme
 
-SR = 48000
+# # PAPER VALUES FOR VCTK
+# SR = 48000
+# FFT_N = 4096
+# FFT_WINDOW = 2400
+# FFT_HOP = 600
+
+SR = 4096
+FFT_N = 512
+FFT_WINDOW = 128
+FFT_HOP = 64
+
 R = 4
-
 TOP_DB = 25
-
-FFT_N = 4096
-FFT_WINDOW = 2400
-FFT_HOP = 600
 
 VCTK_ROOT_DIR = 'data/VCTK-Corpus'
 VCTK_AUDIO_DIR = f'{VCTK_ROOT_DIR}/wav48'
@@ -66,10 +71,10 @@ def get_text(path):
 def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = FFT_WINDOW) -> th.Tensor:
     linear_stft = librosa.stft(audio, n_fft= n_fft, hop_length= hop_length, win_length= window_length)
     linear_spec = np.abs(linear_stft)
-    return th.from_numpy(linear_spec)
+    return linear_spec
 
 def get_mel_spec(linear_spec, mel_basis = MEL_BASIS) -> th.Tensor:
-    return th.from_numpy(np.dot(mel_basis, linear_spec))
+    return np.dot(mel_basis, linear_spec)
 
 def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length = FFT_HOP, win_length = FFT_WINDOW, algo = 'griffin'):
     if algo == 'griffin':
@@ -77,7 +82,7 @@ def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length
     else:
         raise NotImplementedError()
     
-    sf.write('reconstructed.wav', audio, samplerate=sr)
+    sf.write(f'{save_path}/reconstructed.wav', audio, samplerate=sr)
 
 
 def pad_mel_spec(mel_spec, target_len, r = R):
@@ -102,16 +107,23 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
     tts_data_items = []    
     for speaker_id, *_ in tqdm(speakers):        
         speaker_dir = f'p{speaker_id}'
-        speaker_txt_files = os.listdir(f'{txt_path}/{speaker_dir}')        
+        speaker_txt_dir = f'{txt_path}/{speaker_dir}'
+        speaker_audio_dir = f'{audio_path}/{speaker_dir}'
+
+        if not os.path.exists(speaker_txt_dir) or not os.path.exists(speaker_audio_dir):
+            print(f'WARNING: path not found: {speaker_dir}')
+            continue
+
+        speaker_txt_files = os.listdir(speaker_txt_dir)        
         speaker_audio_files = [f'{fn[:-4]}.wav'  for fn in speaker_txt_files]
         
         for txt_file, audio_file in zip(speaker_txt_files, speaker_audio_files):
             utterance_id = txt_file[:-4]
-            txt_file = f'{txt_path}/{speaker_dir}/{txt_file}'
-            audio_file = f'{audio_path}/{speaker_dir}/{audio_file}'
+            txt_file = f'{speaker_txt_dir}/{txt_file}'
+            audio_file = f'{speaker_audio_dir}/{audio_file}'
             tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file, audio_file=audio_file)
             #tts_data_item.plot_spec()
-            tts_data_items.append(tts_data_item)
+            #tts_data_items.append(tts_data_item)
             tts_data_item.save()
 
 
@@ -144,8 +156,8 @@ class TTSDataItem:
             text = text,
             phoneme= phoneme,
             #audio = audio,
-            linear_spec= linear_spec,
-            mel_spec= mel_spec, 
+            linear_spec= th.from_numpy(linear_spec),
+            mel_spec= th.from_numpy(mel_spec), 
             type = type
         )
     
@@ -159,8 +171,8 @@ class TTSDataItem:
 
         plt.show()
 
-    def save(self, processed_path = PROCESSED_SAVE_DIR):
-        save_path = f"{processed_path}/{self.type}/{self.utterance_id}"
+    def save(self, processed_path = PROCESSED_SAVE_DIR, reconstruct_audio_flag = False):
+        save_path = f"{processed_path}/{self.type}_{SR}_{FFT_N}/{self.utterance_id}"
         os.makedirs(save_path, exist_ok = True)
         with open(f"{save_path}/data.dat", "w") as fp:
             fp.write(
@@ -176,6 +188,8 @@ class TTSDataItem:
             )
         th.save(self.linear_spec, f"{save_path}/linear_spec",)
         th.save(self.linear_spec, f"{save_path}/mel_spec", )
+        if reconstruct_audio_flag:
+            reconstruct_audio(linear_spec = self.linear_spec.numpy(), save_path= save_path)
     
 
 get_vctk_audio()
