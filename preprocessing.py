@@ -20,14 +20,19 @@ from tqdm import tqdm
 
 from phoneme import get_phoneme
 
-SR = 48000
+# # PAPER VALUES FOR VCTK
+# SR = 48000
+# FFT_N = 4096
+# FFT_WINDOW = 2400
+# FFT_HOP = 600
+
+SR = 4096
+FFT_N = 512
+FFT_WINDOW = 128
+FFT_HOP = 64
+
 R = 4
-
 TOP_DB = 25
-
-FFT_N = 4096
-FFT_WINDOW = 2400
-FFT_HOP = 600
 
 VCTK_ROOT_DIR = 'data/VCTK-Corpus'
 VCTK_AUDIO_DIR = f'{VCTK_ROOT_DIR}/wav48'
@@ -77,7 +82,7 @@ def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length
     else:
         raise NotImplementedError()
     
-    sf.write('reconstructed.wav', audio, samplerate=sr)
+    sf.write(f'{save_path}/reconstructed.wav', audio, samplerate=sr)
 
 
 def pad_mel_spec(mel_spec, target_len, r = R):
@@ -118,7 +123,7 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
             audio_file = f'{speaker_audio_dir}/{audio_file}'
             tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file, audio_file=audio_file)
             #tts_data_item.plot_spec()
-            tts_data_items.append(tts_data_item)
+            #tts_data_items.append(tts_data_item)
             tts_data_item.save()
 
 
@@ -166,8 +171,8 @@ class TTSDataItem:
 
         plt.show()
 
-    def save(self, processed_path = PROCESSED_SAVE_DIR):
-        save_path = f"{processed_path}/{self.type}/{self.utterance_id}"
+    def save(self, processed_path = PROCESSED_SAVE_DIR, reconstruct_audio_flag = False):
+        save_path = f"{processed_path}/{self.type}_{SR}_{FFT_N}/{self.utterance_id}"
         os.makedirs(save_path, exist_ok = True)
         with open(f"{save_path}/data.dat", "w") as fp:
             fp.write(
@@ -183,6 +188,8 @@ class TTSDataItem:
             )
         th.save(self.linear_spec, f"{save_path}/linear_spec",)
         th.save(self.linear_spec, f"{save_path}/mel_spec", )
+        if reconstruct_audio_flag:
+            reconstruct_audio(linear_spec = self.linear_spec.numpy(), save_path= save_path)
     
 
 get_vctk_audio()
