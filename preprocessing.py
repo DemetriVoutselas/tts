@@ -66,10 +66,10 @@ def get_text(path):
 def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = FFT_WINDOW) -> th.Tensor:
     linear_stft = librosa.stft(audio, n_fft= n_fft, hop_length= hop_length, win_length= window_length)
     linear_spec = np.abs(linear_stft)
-    return th.from_numpy(linear_spec)
+    return linear_spec
 
 def get_mel_spec(linear_spec, mel_basis = MEL_BASIS) -> th.Tensor:
-    return th.from_numpy(np.dot(mel_basis, linear_spec))
+    return np.dot(mel_basis, linear_spec)
 
 def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length = FFT_HOP, win_length = FFT_WINDOW, algo = 'griffin'):
     if algo == 'griffin':
@@ -144,8 +144,8 @@ class TTSDataItem:
             text = text,
             phoneme= phoneme,
             #audio = audio,
-            linear_spec= linear_spec,
-            mel_spec= mel_spec, 
+            linear_spec= th.from_numpy(linear_spec),
+            mel_spec= th.from_numpy(mel_spec), 
             type = type
         )
     
