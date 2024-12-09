@@ -106,7 +106,7 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
 
     tts_data_items = []    
     for speaker_id, *_ in tqdm(speakers):        
-        speaker_dir = f'p{speaker_id}'
+        speaker_dir = f'{speaker_id}'
         speaker_txt_dir = f'{txt_path}/{speaker_dir}'
         speaker_audio_dir = f'{audio_path}/{speaker_dir}'
 
@@ -115,12 +115,17 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
             continue
 
         speaker_txt_files = os.listdir(speaker_txt_dir)        
-        speaker_audio_files = [f'{fn[:-4]}.wav'  for fn in speaker_txt_files]
+        speaker_audio_files = [f'{fn[:-4]}_mic2.flac'  for fn in speaker_txt_files]
         
         for txt_file, audio_file in zip(speaker_txt_files, speaker_audio_files):
             utterance_id = txt_file[:-4]
             txt_file = f'{speaker_txt_dir}/{txt_file}'
             audio_file = f'{speaker_audio_dir}/{audio_file}'
+
+            if not os.path.exists(txt_file) or not os.path.exists(audio_file):
+                print(f"WARNING: failed to find txt/audio file for {speaker_id}/{utterance_id} ")
+                continue
+
             tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file, audio_file=audio_file)
             #tts_data_item.plot_spec()
             #tts_data_items.append(tts_data_item)
