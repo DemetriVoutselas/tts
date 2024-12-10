@@ -165,3 +165,6 @@ def create_dataloader(
         collate_fn=collate_fn,
         num_workers=num_workers
     )
+
+if __name__ == '__main__':
+    

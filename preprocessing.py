@@ -58,15 +58,15 @@ def trim_silence(audio, top_db = TOP_DB):
     audio, _ = librosa.effects.trim(audio, top_db)
     return audio
 
-def get_audio(path, sr = SR):
-    audio, sr = librosa.load(path, sr=sr)
-    return audio
-
 def get_text(path):
     with open(path, 'r') as fp:
         text= fp.read().replace('\n', '')
     
     return normalize_text(text)
+
+def get_audio(path, sr = SR):
+    audio, sr = librosa.load(path, sr=sr)
+    return audio
 
 def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = FFT_WINDOW) -> th.Tensor:
     linear_stft = librosa.stft(audio, n_fft= n_fft, hop_length= hop_length, win_length= window_length)
@@ -141,6 +141,7 @@ class TTSDataItem:
     type: str
     text: str
     phoneme: Optional[list[str]]
+    T: int
     #audio: np.ndarray
 
     linear_spec: th.Tensor
@@ -149,9 +150,9 @@ class TTSDataItem:
     @staticmethod
     def build(speaker_id: str, utterance_id: str, text_file: str, audio_file:str, type: str = 'VCTK' ) -> 'TTSDataItem':
         text = get_text(text_file)
-        audio = get_audio(audio_file)
-         
         phoneme = get_phoneme(text)
+        
+        audio = get_audio(audio_file)        
         linear_spec = get_linear_spec(audio)
         mel_spec = get_mel_spec(linear_spec)
 
@@ -163,7 +164,8 @@ class TTSDataItem:
             #audio = audio,
             linear_spec= th.from_numpy(linear_spec),
             mel_spec= th.from_numpy(mel_spec), 
-            type = type
+            type = type,
+            T = mel_spec.shape[1]
         )
     
     def plot_spec(self, sr = SR, hop_length = FFT_HOP):
@@ -187,14 +189,15 @@ class TTSDataItem:
                         utterance_id = self.utterance_id,
                         type = self.type,
                         text = self.text,
-                        phoneme = self.phoneme
+                        phoneme = self.phoneme,
+                        T = self.T
                     )
                 )
             )
         th.save(self.linear_spec, f"{save_path}/linear_spec",)
-        th.save(self.linear_spec, f"{save_path}/mel_spec", )
+        th.save(self.mel_spec, f"{save_path}/mel_spec", )
         if reconstruct_audio_flag:
             reconstruct_audio(linear_spec = self.linear_spec.numpy(), save_path= save_path)
     
-
-get_vctk_audio()
+if __name__ == '__main__':
+    get_vctk_audio()
