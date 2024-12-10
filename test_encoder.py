@@ -22,10 +22,11 @@ class SpeakerEncoder(nn.Module):
         attention_dim=64,          
         embedding_dim=16,    
         dropout=0.1,
-        attention_heads=2    
+        attention_heads=2,
+        device = torch.device("cpu")    
     ):
         super().__init__()
-        
+        self.device = device
         self.n_mel_bands = n_mel_bands
         self.prenet_dim = prenet_dim
         self.F_mapped = F_mapped
@@ -35,9 +36,9 @@ class SpeakerEncoder(nn.Module):
 
         # Prenet 
         # Input: (B, N, T, F) -> reshape to (B*N, T, F), apply prenet
-        self.prenet = nn.ModuleList([nn.Linear(n_mel_bands, prenet_dim)])        
+        self.prenet = nn.ModuleList([nn.Linear(n_mel_bands, prenet_dim, device=self.device)])        
         for i in range(prenet_layers - 1):
-            self.prenet.append(nn.Linear(prenet_dim, prenet_dim))
+            self.prenet.append(nn.Linear(prenet_dim, prenet_dim, device=self.device))
             
         # Temporal Processing
         self.conv_layers = nn.ModuleList()
@@ -46,7 +47,8 @@ class SpeakerEncoder(nn.Module):
                 nn.Conv1d(in_channels=prenet_dim,
                           out_channels=prenet_dim*2,
                           kernel_size=conv_kernel_size,
-                          padding=(conv_kernel_size- 1)//2)
+                          padding=(conv_kernel_size- 1)//2,
+                          device=self.device)
             )
         self.dropout = nn.Dropout(dropout)
 
@@ -56,16 +58,16 @@ class SpeakerEncoder(nn.Module):
         # (batch, N_samples, F_mapped) -> FC -> ELU -> (batch, N_samples, d_attn)
         self.heads = attention_heads
         total_attention_dim =  attention_dim * self.heads
-        self.query_fc = nn.Linear(F_mapped, total_attention_dim)
-        self.key_fc   = nn.Linear(F_mapped, total_attention_dim)
-        self.value_fc = nn.Linear(F_mapped, total_attention_dim)
+        self.query_fc = nn.Linear(F_mapped, total_attention_dim, device=self.device)
+        self.key_fc   = nn.Linear(F_mapped, total_attention_dim, device=self.device)
+        self.value_fc = nn.Linear(F_mapped, total_attention_dim, device=self.device)
 
-        self.post_mha_fc = nn.Linear(attention_dim * self.heads, 1)  # from (B,N,d_attn*heads)->(B,N)
+        self.post_mha_fc = nn.Linear(attention_dim * self.heads, 1, device=self.device)  # from (B,N,d_attn*heads)->(B,N)
 
         # (batch, N_samples, F_mapped) -> fc -> (batch, N_samples, d_embedding)
-        self.skip_fc = nn.Linear(F_mapped, embedding_dim)
+        self.skip_fc = nn.Linear(F_mapped, embedding_dim, device=self.device)
 
-    def forward(self, mel_specs, T_actual):
+    def forward(self, mel_specs, T_actual):        
         B, N, T, F = mel_specs.size()
         
         x = mel_specs.view(-1, T, F)
@@ -86,7 +88,8 @@ class SpeakerEncoder(nn.Module):
         
         # Global mean pooling (B*N, prenet_dim, T)
         # a mask for each vector corresponding to the actual T
-        mean_mask = torch.arange(x.size(2)).unsqueeze(0) < torch.tensor(T_actual).unsqueeze(1)
+        time_indicies =  torch.arange(x.size(2), device=self.device).unsqueeze(0)
+        mean_mask = time_indicies < T_actual.unsqueeze(1)
         mean_mask = mean_mask.unsqueeze(1).expand(-1, x.size(1), -1)
 
         # zero out the padded entries, and get the correct counts
@@ -143,7 +146,7 @@ class SpeakerEncoder(nn.Module):
         return speaker_embedding
 
 class VCTKDataset(Dataset):
-    def __init__(self, processed_path, accept_ids = None, with_linear_spec = False, transpose_specs = True):
+    def __init__(self, processed_path, device = torch.device("cpu"), accept_ids = None, with_linear_spec = False, transpose_specs = True):
         """
         transpose_specs: swap the last two dimensions. Encoder architecture assumes T,F order while melspec is in F, T order
         """
@@ -163,8 +166,8 @@ class VCTKDataset(Dataset):
                 continue
 
             tts_data_json = self._get_file_json(f'{processed_path}/{folder}/data.dat')             
-            tts_data_json['linear_spec'] = torch.load(f'{folder}/linear_spec', weights_only=True) if with_linear_spec else None
-            tts_data_json['mel_spec'] = torch.load(f'{processed_path}/{folder}/mel_spec', weights_only=True)
+            tts_data_json['linear_spec'] = torch.load(f'{folder}/linear_spec', weights_only=True).to(device) if with_linear_spec else None
+            tts_data_json['mel_spec'] = torch.load(f'{processed_path}/{folder}/mel_spec', weights_only=True).to(device)
             if transpose_specs:
                 tts_data_json['mel_spec'] = tts_data_json['mel_spec'].T
             tts_data_json['T'] = tts_data_json['mel_spec'].shape[0]
@@ -186,7 +189,7 @@ class VCTKDataset(Dataset):
         with open(file_path, 'r') as fp:
             return json.load(fp)
 
-def collate_fn(batch, n_samples = 5):
+def collate_fn(batch, n_samples = 5, device = torch.device("cpu")):
     """
     batch: list of length `batch_size`, where each element is a list of TTSDataItems for that speaker.
     Returns: (batch, N_samples, T, F) tensor of mel spectrograms
@@ -208,7 +211,7 @@ def collate_fn(batch, n_samples = 5):
     F = selected_utterances[0][0].mel_spec.size(1)
     
     #padding
-    padded_mels = torch.zeros(batch_size, n_samples, max_T, F)
+    padded_mels = torch.zeros(batch_size, n_samples, max_T, F, device=device)
     T_actual = []
     for b_idx in range(batch_size):
         for n_idx in range(n_samples):
@@ -216,7 +219,7 @@ def collate_fn(batch, n_samples = 5):
             T_actual.append(mel.size(0))
             padded_mels[b_idx, n_idx, :mel.size(0), :] = mel
 
-    speaker_ids = [it[0].speaker_id for it in batch]    
+    speaker_ids = [it[0].speaker_id for it in batch]
     return speaker_ids, T_actual, padded_mels    
 
 def get_speaker_id_map(file_path = './data/VCTK-Corpus/speaker-info-old.txt'):
@@ -229,54 +232,60 @@ def get_speaker_id_map(file_path = './data/VCTK-Corpus/speaker-info-old.txt'):
 
     return speaker_id_map
 
-def get_speaker_embeddings(file_path = 'speaker_embeddings.pth'):
+def get_speaker_embeddings(file_path = 'speaker_embeddings.pth', device = torch.device("cpu")):
     # get old speaker info
     with open(file_path, 'rb') as fp:
-       speaker_embeddings = torch.load(fp)
+       speaker_embeddings = torch.load(fp, map_location=device)
 
     return speaker_embeddings
 
 # Example usage
 if __name__ == "__main__":    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     speaker_id_map = get_speaker_id_map() 
-    speaker_embeddings: torch.nn.Embedding = get_speaker_embeddings()
+    speaker_embeddings: torch.nn.Embedding = get_speaker_embeddings(device = device)
 
-    dataset = VCTKDataset('./processed/VCTK_4096_512', accept_ids = speaker_id_map.keys())
+    dataset = VCTKDataset('./processed/VCTK_4096_512', device = device, accept_ids = speaker_id_map.keys())
     
     dataloader = DataLoader(
         dataset,
         batch_size = 2,
         shuffle=True,
-        collate_fn=lambda x: collate_fn(x, 8)
+        collate_fn=lambda x: collate_fn(x, 8, device = device)
     )
 
     model = SpeakerEncoder(
         n_mel_bands=80,
-        prenet_layers=2,
+        prenet_layers=1,
         prenet_dim=64,
         F_mapped=64, 
-        conv_layers=6,
+        conv_layers=4,
         conv_kernel_size=5,
       
         attention_dim=32,          
         embedding_dim=16,    
         dropout=0.1,
-        attention_heads=1
-    )
+        attention_heads=1,
+        device = device
+    ).to(device)
 
+    model = torch.load('output/savepoints/speaker_encoder_mode_FINAL.pth', map_location=device)
     optimizer = torch.optim.Adam(model.parameters(), lr = 5e-4)
 
     SAVE_DIR = 'output/savepoints'
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     epoch = 0
-    max_epochs = 1000
+    max_epochs = 10000
 
     for epoch in range(max_epochs):
         epoch_loss = 0
-        for speaker_ids, T_actual, batch in dataloader:            
+        for speaker_ids, T_actual, batch in dataloader:   
+            speaker_ids = torch.tensor([speaker_id_map[id] for id in speaker_ids], device = device)
+            T_actual = torch.tensor(T_actual, device=device)
+
             r = model.forward(batch, T_actual)
-            true_embeddings = speaker_embeddings(torch.tensor([speaker_id_map[id] for id in speaker_ids]))
+            true_embeddings = speaker_embeddings(speaker_ids)
 
             loss = torch.nn.functional.l1_loss(r, true_embeddings)
             optimizer.zero_grad()

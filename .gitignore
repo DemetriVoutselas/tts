@@ -1,0 +1,6 @@
+.DS_store/
+.venv/
+.idea/
+data/
+processed/
+__pycache__/
