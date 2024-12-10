@@ -117,22 +117,44 @@ def get_vctk_audio(speaker_info_path = VCTK_SPEAKER_INFO_PATH, audio_path = VCTK
         speaker_txt_files = os.listdir(speaker_txt_dir)        
         speaker_audio_files = [f'{fn[:-4]}_mic2.flac'  for fn in speaker_txt_files]
         
-        for txt_file, audio_file in zip(speaker_txt_files, speaker_audio_files):
-            utterance_id = txt_file[:-4]
-            txt_file = f'{speaker_txt_dir}/{txt_file}'
-            audio_file = f'{speaker_audio_dir}/{audio_file}'
+        for txt_file_path, audio_file_path in zip(speaker_txt_files, speaker_audio_files):
+            utterance_id = txt_file_path[:-4]
+            txt_file_path = f'{speaker_txt_dir}/{txt_file_path}'
+            audio_file_path = f'{speaker_audio_dir}/{audio_file_path}'
 
-            if not os.path.exists(txt_file) or not os.path.exists(audio_file):
+            if not os.path.exists(txt_file_path) or not os.path.exists(audio_file_path):
                 print(f"WARNING: failed to find txt/audio file for {speaker_id}/{utterance_id} ")
                 continue
 
-            tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file, audio_file=audio_file)
+            tts_data_item = TTSDataItem.build(speaker_id = speaker_id, utterance_id = utterance_id, text_file=txt_file_path, audio_file=audio_file_path)
             #tts_data_item.plot_spec()
             #tts_data_items.append(tts_data_item)
             tts_data_item.save()
 
 
     return tts_data_items
+
+def process_custom_audio(dir_path):
+    for i, file in enumerate(os.listdir(dir_path)):
+        file_path = os.path.join(dir_path, file)
+
+        audio = get_audio(file_path)        
+        linear_spec = get_linear_spec(audio)
+        mel_spec = get_mel_spec(linear_spec)
+
+        tts_item = TTSDataItem(
+            speaker_id = 'demetri', 
+            utterance_id = str(i), 
+            type = 'custom',
+            text = '',
+            phoneme = None,
+            linear_spec= th.from_numpy(linear_spec),
+            mel_spec= th.from_numpy(mel_spec), 
+            T = mel_spec.shape[1]
+        )       
+
+        tts_item.save() 
+
 
 @dataclass(frozen=True)
 class TTSDataItem:
@@ -178,7 +200,7 @@ class TTSDataItem:
 
         plt.show()
 
-    def save(self, processed_path = PROCESSED_SAVE_DIR, reconstruct_audio_flag = False):
+    def save(self, processed_path = PROCESSED_SAVE_DIR, reconstruct_audio_flag = True):
         save_path = f"{processed_path}/{self.type}_{SR}_{FFT_N}/{self.utterance_id}"
         os.makedirs(save_path, exist_ok = True)
         with open(f"{save_path}/data.dat", "w") as fp:
@@ -200,4 +222,5 @@ class TTSDataItem:
             reconstruct_audio(linear_spec = self.linear_spec.numpy(), save_path= save_path)
     
 if __name__ == '__main__':
-    get_vctk_audio()
+    #get_vctk_audio()
+    process_custom_audio('DemetriVoice')
