@@ -269,8 +269,8 @@ if __name__ == "__main__":
         device = device
     ).to(device)
 
-    model = torch.load('output/savepoints/speaker_encoder_mode_FINAL.pth', map_location=device)
-    optimizer = torch.optim.Adam(model.parameters(), lr = 5e-4)
+    model = torch.load('output/savepoints/speaker_encoder_mode_1750.pth', map_location=device)
+    optimizer = torch.optim.Adam(model.parameters(), lr = 1e-6)
 
     SAVE_DIR = 'output/savepoints'
     os.makedirs(SAVE_DIR, exist_ok=True)
