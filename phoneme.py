@@ -38,8 +38,13 @@ phoneme_single_letter_map = {
     'Z': '@Z',
 }
 
-alphabet_symbols = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!?.')
+alphabet_symbols = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!?. ')
 special_symbols = set('_')
+all_symbols = phoneme_symbols | set(phoneme_single_letter_map.values()) | alphabet_symbols | special_symbols
+TOTAL_SYMBOLS = len(all_symbols)
+
+symbol_id_map = {symbol: i for i, symbol in enumerate(all_symbols)}
+PAD = symbol_id_map['_']
 
 def get_phoneme(text: str):        
     # get rid of symbols to look up phonemes
