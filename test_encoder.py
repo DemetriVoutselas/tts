@@ -99,6 +99,7 @@ class SpeakerEncoder(nn.Module):
 		# Global mean pooling (B*N, prenet_dim, T)
 		# a mask for each vector corresponding to the actual T
 		time_indicies =  torch.arange(x.size(2), device=self.device).unsqueeze(0)
+		z,y = time_indicies.shape, T_actual.shape
 		mean_mask = time_indicies < T_actual.unsqueeze(1)
 		mean_mask = mean_mask.unsqueeze(1).expand(-1, x.size(1), -1)
 
@@ -131,6 +132,7 @@ class SpeakerEncoder(nn.Module):
 		# scores: (B,H,N,N)
 		scores = torch.matmul(Q, K.transpose(-1, -2)) / (d_head**0.5)
 		attn = torch.softmax(scores, dim=-1)  # (B,H,N,N)
+		print(attn)
 		context = torch.matmul(attn, V)  # (B,H,N,d_head)
 
 		#rearrange context to (B,N,H,d_head)
