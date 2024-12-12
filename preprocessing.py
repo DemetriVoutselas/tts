@@ -26,10 +26,10 @@ import phoneme
 # FFT_WINDOW = 2400
 # FFT_HOP = 600
 
-SR = 4096
-FFT_N = 512
-FFT_WINDOW = 128
-FFT_HOP = 64
+SR = 4096 * 4
+FFT_N = 512 * 8
+FFT_WINDOW = 128 * 8
+FFT_HOP = 64 * 4
 
 R = 4
 TOP_DB = 25
@@ -95,9 +95,9 @@ def get_linear_spec(audio, n_fft = FFT_N, hop_length = FFT_HOP, window_length = 
 def get_mel_spec(linear_spec, mel_basis = MEL_BASIS) -> th.Tensor:
     return np.dot(mel_basis, linear_spec)
 
-def reconstruct_audio(linear_spec, save_path, n_iter = 1000, sr = SR, hop_length = FFT_HOP, win_length = FFT_WINDOW, fft_n = FFT_N, algo = 'griffin'):
+def reconstruct_audio(linear_spec, save_path, n_iter = 100, sr = SR, hop_length = FFT_HOP, win_length = FFT_WINDOW, fft_n = FFT_N, algo = 'griffin'):
     if algo == 'griffin':
-        audio = librosa.griffinlim(linear_spec.T.numpy(), n_iter=n_iter, hop_length=hop_length, win_length=win_length, n_fft = FFT_N)
+        audio = librosa.griffinlim(linear_spec, n_iter=n_iter, hop_length=hop_length, win_length=win_length)
     else:
         raise NotImplementedError()
     
@@ -162,9 +162,9 @@ def process_custom_audio(dir_path):
         mel_spec = get_mel_spec(linear_spec)
 
         tts_item = TTSDataItem(
-            speaker_id = 'demetri', 
+            speaker_id = 'jeyan', 
             utterance_id = str(i), 
-            type = 'custom',
+            type = 'jeyan',
             text = '',
             phoneme = None,
             lin_spec= th.from_numpy(linear_spec),
@@ -261,11 +261,11 @@ def get_saved_data(set_path, device = th.device('cpu'), with_lin = False, transp
             else:
                 return tensor
 
-        mel_spec = pad_spec(th.load(mel_spec_path, weights_only=True)).to(device)
+        mel_spec = pad_spec(th.load(mel_spec_path, weights_only=True, device=device))
         data['mel_spec'] = mel_spec
 
         if with_lin:
-            lin_spec = pad_spec(th.load(lin_spec_path, weights_only=True)).to(device)
+            lin_spec = pad_spec(th.load(lin_spec_path, weights_only=True, device=device))
             data['lin_spec'] = lin_spec
 
         if transpose_specs:
@@ -292,7 +292,7 @@ def get_speaker_id_map(file_path = './data/VCTK-Corpus/speaker-info-old.txt'):
         for row in fp:
             tokens = row.split()
             id = tokens[0]
-            if not id.startswith('p'):
+            if not id[0].isalpha():
                 id = 'p' + id #add leading p to align it with newer version
             speaker_id_map[id] = len(speaker_id_map)
 
@@ -300,4 +300,4 @@ def get_speaker_id_map(file_path = './data/VCTK-Corpus/speaker-info-old.txt'):
 
 if __name__ == '__main__':
     get_vctk_audio()
-    #process_custom_audio('DemetriVoice')
+    #process_custom_audio('data/custom_samples/jeyan/')

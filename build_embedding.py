@@ -40,8 +40,8 @@ def get_custom_data(base_path, device):
     return padded_batch, T_actual
 
 
-batch, T_actual  = get_custom_data('processed/custom_16384_4096', device = device)
-model = th.load('output/savepoints/speaker_encoder_mode_savepoint.pth', map_location=device).to(device)
+batch, T_actual  = get_custom_data('processed/jeyan_16384_4096', device = device)
+model = th.load('output/savepoints/speaker_encoder_mode_FINAL_3.pth', map_location=device).to(device)
 model.device = device
 model.eval()
 
@@ -49,5 +49,5 @@ EMBEDDING_OUT_DIR = 'output/embeddings/'
 os.makedirs(EMBEDDING_OUT_DIR, exist_ok=True)
 with th.no_grad():
     output = model(batch, T_actual)
-    th.save(output, os.path.join(EMBEDDING_OUT_DIR, 'Demetrius_large_3_2800__45.pth'))
+    th.save(output, os.path.join(EMBEDDING_OUT_DIR, 'Jeyan_large_3_2800__45.pth'))
 

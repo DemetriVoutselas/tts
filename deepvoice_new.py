@@ -25,15 +25,15 @@ class TTSDataset(Dataset):
 
 
 
-def collate_fn(batch):
+def collate_fn(batch, device):
     n = len(batch)
     speaker_ids = []
     texts = []
     T_actual = []
     T_max = max(it.lin_spec.size(-1) for it in batch)
     
-    padded_lin_specs = th.zeros((n, batch[0].lin_spec.size(0), T_max))
-    padded_mel_specs = th.zeros((n, batch[0].mel_spec.size(0), T_max))
+    padded_lin_specs = th.zeros((n, batch[0].lin_spec.size(0), T_max), device=device)
+    padded_mel_specs = th.zeros((n, batch[0].mel_spec.size(0), T_max), device=device)
 
     for i, it in enumerate(batch):
         speaker_ids.append(it.speaker_id)
@@ -49,9 +49,9 @@ def collate_fn(batch):
     symbol_seqs = get_symbol_sequence(texts)
 
     text_max = max(len(seq) for seq in symbol_seqs)
-    symbols = th.full((n, text_max), phoneme.PAD)
+    symbols = th.full((n, text_max), phoneme.PAD, device = device)
     for i, seq in enumerate(symbol_seqs):
-        symbols[i, :len(seq)] = th.tensor(seq).unsqueeze(0)
+        symbols[i, :len(seq)] = th.tensor(seq, device=device).unsqueeze(0)
 
     return (
         speaker_ids,
@@ -72,10 +72,11 @@ class Speaker(nn.Module):
     Output shape:
       (B, hidden_dim)
     """
-    def __init__(self, speaker_embedding_dim: int, hidden_dim: int):
+    def __init__(self, speaker_embedding_dim: int, hidden_dim: int, device):
         super().__init__()
-        self.fc = nn.utils.weight_norm(module=nn.Linear(in_features=speaker_embedding_dim, out_features=hidden_dim))
-        self.softsign = nn.Softsign()
+        self.device = device
+        self.fc = nn.utils.weight_norm(module=nn.Linear(in_features=speaker_embedding_dim, out_features=hidden_dim).to(device))
+        self.softsign = nn.Softsign().to(device)
 
     def forward(self, speaker_embedding: th.Tensor) -> th.Tensor:
         # speaker_embedding: (B, speaker_embedding_dim)
@@ -106,12 +107,14 @@ class ConvBlock(nn.Module):
         hidden_dim: int,
         speaker_embedding_dim: int,
         dropout: float,
-        causal_padding: bool = False
+        device,
+        causal_padding: bool = False, 
     ):
         super().__init__()
         assert kernel_size % 2 == 1, "Kernel size must be odd for symmetrical padding."
 
-        self.sqrt12 = np.sqrt(0.5)
+        self.device = device
+        self.sqrt12 = th.sqrt(th.tensor(0.5))
         self.hidden_dim = hidden_dim
         self.dropout = nn.Dropout(p=dropout)
 
@@ -124,7 +127,7 @@ class ConvBlock(nn.Module):
             p = (kernel_size - 1) // 2
             padding = (p, p)
 
-        self.pad = nn.ZeroPad1d(padding)
+        self.pad = nn.ZeroPad1d(padding).to(device)
         self.conv = nn.utils.weight_norm(
             module=nn.Conv1d(
                 in_channels=hidden_dim,
@@ -132,13 +135,14 @@ class ConvBlock(nn.Module):
                 kernel_size=kernel_size,
                 stride=1,
                 padding=0
-            )
+            ).to(device)
         )
-        self.sigmoid = nn.Sigmoid()
+        self.sigmoid = nn.Sigmoid().to(device)
         self.speaker = Speaker(
             speaker_embedding_dim=speaker_embedding_dim,
-            hidden_dim=hidden_dim
-        )
+            hidden_dim=hidden_dim,
+            device = device
+        ).to(device)
 
         
     def forward(self, x: th.Tensor, speaker_embedding: th.Tensor) -> th.Tensor:
@@ -183,25 +187,29 @@ class Encoder(nn.Module):
         speaker_embedding_dim: int,
         dropout: float,
         n_conv: int,
-        kernel_size: int
+        kernel_size: int,
+        device
     ):
         super().__init__()
 
+        self.device = device
         self.prenet_speaker = Speaker(
             speaker_embedding_dim=speaker_embedding_dim,
-            hidden_dim=hidden_dim
+            hidden_dim=hidden_dim, 
+            device = device
         )
 
         self.postnet_speaker = Speaker(
             speaker_embedding_dim=speaker_embedding_dim,
-            hidden_dim=hidden_dim
+            hidden_dim=hidden_dim, 
+            device = device
         )
 
         self.prenet_fc = nn.utils.weight_norm(
             module=nn.Linear(
                 in_features=symbol_embedding_dim,
                 out_features=hidden_dim
-            )
+            ).to(device)
         )
 
         self.conv_block = nn.ModuleList(
@@ -211,8 +219,9 @@ class Encoder(nn.Module):
                     hidden_dim=hidden_dim,
                     speaker_embedding_dim=speaker_embedding_dim,
                     dropout=dropout,
+                    device = self.device,
                     causal_padding=False
-                )
+                ).to(device)
                 for _ in range(n_conv)
             ]
         )
@@ -221,10 +230,10 @@ class Encoder(nn.Module):
             module=nn.Linear(
                 in_features=hidden_dim,
                 out_features=hidden_dim
-            )
+            ).to(device)
         )
 
-        self.sqrt12 = np.sqrt(0.5)
+        self.sqrt12 = th.sqrt(th.tensor(0.5)).to(device)
            
     def forward(self, symbol_embedding: th.Tensor, speaker_embedding: th.Tensor, symbol_lengths: th.Tensor = None):
         # symbol_embedding: (B, T_text, symbol_embedding_dim)
@@ -282,11 +291,13 @@ class Prenet(nn.Module):
         hidden_dim: int,
         speaker_embedding_dim: int,
         dropout: float,
-        n_proj_layers: int
+        n_proj_layers: int, 
+        device
     ):
         super().__init__()
 
-        self.dropout = nn.Dropout(p=dropout)
+        self.device = device 
+        self.dropout = nn.Dropout(p=dropout).to(device)
         self.n_proj_layers = n_proj_layers
         self.fc = nn.ModuleList()
         self.relu = nn.ModuleList()
@@ -294,9 +305,9 @@ class Prenet(nn.Module):
 
         for i in range(n_proj_layers):
             in_dim = mel_spec_dim if i == 0 else hidden_dim
-            self.fc.append(nn.Linear(in_features=in_dim, out_features=hidden_dim))
-            self.relu.append(nn.ReLU())
-            self.speaker.append(Speaker(speaker_embedding_dim=speaker_embedding_dim, hidden_dim=hidden_dim))
+            self.fc.append(nn.Linear(in_features=in_dim, out_features=hidden_dim)).to(device)
+            self.relu.append(nn.ReLU()).to(device)
+            self.speaker.append(Speaker(speaker_embedding_dim=speaker_embedding_dim, hidden_dim=hidden_dim, device = device)).to(device)
 
 
     def forward(self, input: th.Tensor, speaker_embedding: th.Tensor) -> th.Tensor:
@@ -334,38 +345,38 @@ class Attention(nn.Module):
       (B, T_dec, hidden_dim)
     """
         
-    def __init__(self, speaker_embedding_dim, hidden_dim, dropout):
+    def __init__(self, speaker_embedding_dim, hidden_dim, dropout, device):
         super().__init__()
 
         self.hidden_dim = hidden_dim
-
+        self.device = device 
         # we assume multi speaker weights
         self.speaker_query_proj = nn.Sequential(
-            nn.Linear(in_features=speaker_embedding_dim, out_features=1),
-            nn.Sigmoid()
-        )
+            nn.Linear(in_features=speaker_embedding_dim, out_features=1).to(device),
+            nn.Sigmoid().to(device)
+        ).to(device)
 
         self.speaker_key_proj = nn.Sequential(
-            nn.Linear(in_features=speaker_embedding_dim, out_features=1),
-            nn.Sigmoid()
-        )
+            nn.Linear(in_features=speaker_embedding_dim, out_features=1).to(device),
+            nn.Sigmoid().to(device)
+        ).to(device)
 
-        self.query_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
-        self.key_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
-        self.value_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
-        self.output_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim)
+        self.query_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim).to(device)
+        self.key_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim).to(device)
+        self.value_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim).to(device)
+        self.output_proj = nn.Linear(in_features=hidden_dim, out_features=hidden_dim).to(device)
 
         # Shared weights for query/key projection as in the paper
         # roughly diagonal initialization since thats roughly what we want attentiont o look like
-        shared_weights = th.eye(hidden_dim) + th.randn(hidden_dim, hidden_dim)
+        shared_weights = th.eye(hidden_dim).to(device) + th.randn(hidden_dim, hidden_dim).to(device)
         shared_weights = shared_weights / np.sqrt(hidden_dim)
         self.query_proj.weight.data = shared_weights
         self.key_proj.weight.data = shared_weights
 
-        self.dropout = nn.Dropout(p=dropout)
-        self.softmax = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(p=dropout).to(device)
+        self.softmax = nn.Softmax(dim=-1).to(device)
 
-        self.sqrt_hidden = th.sqrt(th.tensor(self.hidden_dim))
+        self.sqrt_hidden = th.sqrt(th.tensor(self.hidden_dim)).to(device)
     
     def position_encoding(self, length: int, d_model: int, position_rate: th.tensor, current_pos: int = 0):
         """
@@ -380,11 +391,11 @@ class Attention(nn.Module):
         # i: positions from 0 to length-1
         # k: dimension indices from 0 to d_model-1
         B = position_rate.shape[0]
-        position = th.arange(current_pos, current_pos + length).unsqueeze(1).float()        # shape (length, 1)
-        k = th.arange(d_model).float()                                                      # shape (d_model)
+        position = th.arange(current_pos, current_pos + length).unsqueeze(1).float().to(self.device)        # shape (length, 1)
+        k = th.arange(d_model).float().to(self.device)                                                      # shape (d_model)
 
         # denominator 10000^(k/d)
-        div_term = (10000.0 ** (k / d_model)).unsqueeze(0)  # (d_model,)
+        div_term = (10000.0 ** (k / d_model)).unsqueeze(0).to(self.device)  # (d_model,)
 
         # 
         position = position.unsqueeze(0)
@@ -411,11 +422,11 @@ class Attention(nn.Module):
         Returns:
             Boolean mask of shape (T_dec, T_text) where True values are allowed
         """
-        decoder_positions = th.arange(T_dec).unsqueeze(-1)
+        decoder_positions = th.arange(T_dec).unsqueeze(-1).to(self.device)
         lb = (decoder_positions - window).clamp(min=0)
         ub = (decoder_positions + window).clamp(max = T_text - 1)
 
-        text_positions = th.arange(T_text).unsqueeze(0)
+        text_positions = th.arange(T_text).unsqueeze(0).to(self.device)
 
         return (text_positions >= lb) & (text_positions <= ub)
 
@@ -425,7 +436,7 @@ class Attention(nn.Module):
         keys: th.Tensor,
         values: th.Tensor,
         speaker_embedding: th.Tensor,
-        current_mel_pos: int
+        current_mel_pos: int, 
     ) -> th.Tensor:
         # query: (B, T_dec, hidden_dim)
         # keys: (B, T_text, hidden_dim)
@@ -495,16 +506,18 @@ class DecoderCore(nn.Module):
         hidden_dim: int,
         dropout: float,
         n_conv_layers: int,
-        kernel_size: int
+        kernel_size: int,
+        device
     ):
         super().__init__()
-
+        self.device = device
         self.n_conv_layers = n_conv_layers
         self.attn_final = Attention(
             speaker_embedding_dim=speaker_embedding_dim,
             hidden_dim=hidden_dim,
-            dropout=dropout
-        )
+            dropout=dropout,
+            device=device
+        ).to(self.device)
 
         self.convs = nn.ModuleList()
         for _ in range(n_conv_layers):
@@ -514,8 +527,9 @@ class DecoderCore(nn.Module):
                     hidden_dim=hidden_dim,
                     speaker_embedding_dim=speaker_embedding_dim,
                     dropout=dropout,
+                    device = device,
                     causal_padding=True
-                )
+                ).to(self.device)
             )
             
 
@@ -525,7 +539,7 @@ class DecoderCore(nn.Module):
         enc_keys: th.Tensor,
         enc_values: th.Tensor,
         speaker_embedding: th.Tensor,
-        current_mel_pos: int
+        current_mel_pos: int,
     ) -> th.Tensor:
         # input: (B, T_dec, hidden_dim)
         conv_out = input.transpose(1, 2)  # (B, hidden_dim, T_dec)
@@ -557,10 +571,10 @@ class Done(nn.Module):
     Output shape:
       done_prob: (B, T_dec, 1) - probability of being done
     """
-    def __init__(self, hidden_dim: int):
+    def __init__(self, hidden_dim: int, device):
         super().__init__()
-        self.fc = nn.Linear(in_features=hidden_dim, out_features=1)
-        self.sigmoid = nn.Sigmoid()
+        self.fc = nn.Linear(in_features=hidden_dim, out_features=1).to(device)
+        self.sigmoid = nn.Sigmoid().to(device)
 
     def forward(self, input: th.Tensor) -> th.Tensor:
         # input: (B, T_dec, hidden_dim)
@@ -592,31 +606,37 @@ class Decoder(nn.Module):
         n_proj_layers: int,
         mel_dim: int,
         reduction_factor: int,
-        kernel_size: int
+        kernel_size: int, 
+        device
     ):
         super().__init__()
 
+        self.device = device
         self.n_layers = n_proj_layers
         self.reduction_factor = reduction_factor
         self.mel_dim = mel_dim
 
-        self.done = Done(hidden_dim=hidden_dim)
+        self.done = Done(hidden_dim=hidden_dim, device = device).to(device)
+
         self.prenet = Prenet(
             mel_spec_dim=mel_dim,
             hidden_dim=hidden_dim,
             speaker_embedding_dim=speaker_embedding_dim,
             dropout=dropout,
-            n_proj_layers=n_proj_layers
-        )
+            n_proj_layers=n_proj_layers,
+            device = device
+        ).to(device)
+
         self.decoder_core = DecoderCore(
             speaker_embedding_dim=speaker_embedding_dim,
             hidden_dim=hidden_dim,
             dropout=dropout,
             n_conv_layers=n_conv_layers,
-            kernel_size=kernel_size
-        )
+            kernel_size=kernel_size,
+            device = device
+        ).to(device)
 
-        self.mel_fc = nn.Linear(in_features=hidden_dim, out_features=mel_dim * reduction_factor)
+        self.mel_fc = nn.Linear(in_features=hidden_dim, out_features=mel_dim * reduction_factor).to(device)
         #self.mel_sigmoid_fc = nn.Linear(in_features=hidden_dim, out_features=mel_dim * reduction_factor)
         #self.mel_sigmoid = nn.Sigmoid()
 
@@ -676,10 +696,12 @@ class Converter(nn.Module):
         n_conv_layers: int,
         sharpening_factor: float,
         kernel_size: int,
-        dropout: float
+        dropout: float,
+        device
     ):
         super().__init__()
 
+        self.device = device
         self.sharpening_factor = sharpening_factor
 
         self.conv = nn.ModuleList(
@@ -689,13 +711,14 @@ class Converter(nn.Module):
                     hidden_dim=hidden_dim,
                     speaker_embedding_dim=speaker_embedding_dim,
                     dropout=dropout,
+                    device = device, 
                     causal_padding=False
-                )
+                ).to(device)
                 for _ in range(n_conv_layers)
             ]
         )
 
-        self.linear_spec_proj = nn.Linear(in_features=hidden_dim, out_features=linear_spec_dim)
+        self.linear_spec_proj = nn.Linear(in_features=hidden_dim, out_features=linear_spec_dim).to(device)
 
     def forward(self, decoder_out: th.Tensor, speaker_embedding: th.Tensor) -> th.Tensor:
         # decoder_out: (B, T_dec_out, hidden_dim)
@@ -751,18 +774,20 @@ class DeepVoice3(nn.Module):
         lin_dim: int,
         dropout: float,
         sharpening_factor: float,
-        kernel_size: int
+        kernel_size: int,
+        device
     ):
         super().__init__()
         self.reduction_factor = reduction_factor
         self.mel_dim = mel_dim
         self.lin_dim = lin_dim
         self.hidden_dim = hidden_dim
-
+        self.device = device
+        
         self.speaker_id_map = speaker_id_map
         
-        self.symbol_embedder = nn.Embedding(num_embeddings=n_symbols, embedding_dim=symbol_embedding_dim)
-        self.speaker_embedder = nn.Embedding(num_embeddings=len(speaker_id_map), embedding_dim=speaker_embedding_dim)
+        self.symbol_embedder = nn.Embedding(num_embeddings=n_symbols, embedding_dim=symbol_embedding_dim).to(device)
+        self.speaker_embedder = nn.Embedding(num_embeddings=len(speaker_id_map), embedding_dim=speaker_embedding_dim).to(device)
 
         self.encoder = Encoder(
             symbol_embedding_dim=symbol_embedding_dim,
@@ -770,7 +795,8 @@ class DeepVoice3(nn.Module):
             speaker_embedding_dim=speaker_embedding_dim,
             dropout=dropout,
             n_conv=encoder_layers,
-            kernel_size=kernel_size
+            kernel_size=kernel_size,
+            device = device
         )
 
         self.decoder = Decoder(
@@ -781,7 +807,8 @@ class DeepVoice3(nn.Module):
             mel_dim=mel_dim,
             n_proj_layers=decoder_proj_layers,
             reduction_factor=reduction_factor,
-            kernel_size=kernel_size
+            kernel_size=kernel_size,
+            device = device
         )
 
         self.converter = Converter(
@@ -791,7 +818,8 @@ class DeepVoice3(nn.Module):
             n_conv_layers=converter_layers,
             sharpening_factor=sharpening_factor,
             kernel_size=kernel_size,
-            dropout=dropout
+            dropout=dropout,
+            device = device
         )
 
     def forward(
@@ -811,7 +839,7 @@ class DeepVoice3(nn.Module):
         # current_mel_pos: starting mel position for positional encoding (int)
 
         # Map speaker IDs to embeddings
-        speaker_ids = th.tensor([self.speaker_id_map[sid] for sid in raw_speaker_ids])
+        speaker_ids = th.tensor([self.speaker_id_map[sid] for sid in raw_speaker_ids]).to(self.device)
         speaker_embedding = self.speaker_embedder(speaker_ids)  # (B, speaker_embedding_dim)
 
         symbol_embedding = self.symbol_embedder(symbols)  # (B, T_text, symbol_embedding_dim)
@@ -819,16 +847,16 @@ class DeepVoice3(nn.Module):
 
         B, mel_dim, T_frames = mel_specs.shape
         T_dec = T_frames // self.reduction_factor
-        initial_zeros = th.zeros(B, 1, mel_dim)
+        initial_zeros = th.zeros(B, 1, mel_dim).to(self.device)
         mel_specs_dec = mel_specs.transpose(1, 2)[:, ::self.reduction_factor, ]
-        mel_specs_dec = th.cat([initial_zeros, mel_specs_dec[:, :-1, :]], dim=1,) # we leave off the last frame for the input. 
+        mel_specs_dec = th.cat([initial_zeros, mel_specs_dec[:, :-1, :]], dim=1,).to(self.device) # we leave off the last frame for the input. 
 
         attn_out, mel_out, done_out = self.decoder(
             mel_specs=mel_specs_dec,
             encoder_keys=keys,
             encoder_values=values,
             speaker_embedding=speaker_embedding,
-            current_mel_pos=current_mel_pos
+            current_mel_pos=current_mel_pos,
         ) # attn_out: (B, T_dec, H), mel_out: (B, T_dec, mel_dim), done_out: (B, T_dec, 1)
 
         attn_out_expanded = attn_out.unsqueeze(2).expand(B, T_dec, self.reduction_factor, self.hidden_dim).contiguous()
@@ -861,7 +889,7 @@ class DeepVoice3(nn.Module):
             generated_attns = []
             done = False
             curr_mel_pos = 0
-            curr_input = th.zeros((1, self.reduction_factor, self.mel_dim))
+            curr_input = th.zeros((1, self.reduction_factor, self.mel_dim)).to(self.device)
             step = 0
 
             while not done and step < max_decoder_steps:
@@ -896,8 +924,10 @@ if __name__ == "__main__":
     REDUCTION_FACTOR = 4
     FFT_N = 512
     MEL_DIM = 80
+
+    device = ["cpu", "cuda"][th.cuda.is_available()]
     
-    tts_data = get_saved_data('VCTK_4096_512', with_lin=True, transpose_specs=False, max_load = 2000, reduction_factor = REDUCTION_FACTOR)
+    tts_data = get_saved_data('VCTK_4096_512', with_lin=True, transpose_specs=False, max_load = None, reduction_factor = REDUCTION_FACTOR, device = device)
     dataset = TTSDataset(tts_data)
     speaker_id_map = get_speaker_id_map('./data/VCTK-Corpus/speaker-info.txt')
     symbol_id_map = phoneme.symbol_id_map
@@ -917,8 +947,9 @@ if __name__ == "__main__":
         lin_dim=FFT_N // 2 + 1,
         dropout=0.1,
         sharpening_factor=1.4,
-        kernel_size=5
-    )
+        kernel_size=5,
+        device = device
+    ).to(device)
 
     dataloader = DataLoader(
         dataset, 
@@ -964,16 +995,16 @@ if __name__ == "__main__":
             # Compute losses
             # Mel L1 loss
             #TODO: Validate whether this needs to be shifted by R since we are ideally predicting the next frame. 
-            mel_loss = nn.functional.l1_loss(input=mel_out, target=mel_specs.transpose(1,2), reduction='none')
+            mel_loss = nn.functional.l1_loss(input=mel_out, target=mel_specs.transpose(1,2), reduction='none').to(device)
             mel_loss = (mel_mask * mel_loss).sum() / mel_mask.sum()
 
             # Linear L1 loss
-            lin_loss = nn.functional.l1_loss(input=lin_out, target=lin_specs.transpose(1,2), reduction='none')
+            lin_loss = nn.functional.l1_loss(input=lin_out, target=lin_specs.transpose(1,2), reduction='none').to(device)
             lin_loss = (lin_mask * lin_loss).sum() / lin_mask.sum()
 
             # Done loss
             # Create target: done at last valid frame
-            done_target = th.zeros_like(done_out)
+            done_target = th.zeros_like(done_out).to(device)
             for i in range(B):
                 final_step = (T_actual[i] - 1) // model.reduction_factor
                 done_target[i, final_step, 0] = 1.0
@@ -982,7 +1013,7 @@ if __name__ == "__main__":
                 input=done_out,
                 target=done_target,
                 reduction='none'
-            )
+            ).to(device)
 
             total_loss = (mel_loss + lin_loss + done_loss).mean()
 
@@ -1000,7 +1031,8 @@ if __name__ == "__main__":
             ).squeeze(0)
 
             reconstruct_audio(
-                lin_out, f'output/',
+                lin_out.T.numpy(), 
+                f'output/',
                 hop_length= 64,
                 win_length = 128,
                 fft_n = FFT_N
